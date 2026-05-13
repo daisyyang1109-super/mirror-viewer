@@ -1,0 +1,45 @@
+# 防止误传任何 session 数据 / mirror 渲染产物
+*.jsonl
+*.html
+mirror/
+.claude/mirror/
+**/search-index.json
+**/summaries.json
+**/closed-sessions.json
+**/detailed-summaries/
+**/pattern-data.json
+**/automation-analysis.md
+
+# 私人 brief / 设计稿 (本仓库不传)
+**/AI-CLI-MANAGER-BRIEF.md
+**/HYBRID-VIEW-MVP-BRIEF.md
+**/CONTENT-VALIDATOR-DESIGN.md
+**/article-cli-gui.*
+
+# Secrets
+.env
+.env.*
+*.key
+.deepseek
+.dev.vars
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Temp
+/tmp/
+*.tmp
