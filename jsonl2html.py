@@ -211,7 +211,7 @@ def parse_jsonl_for_metadata(jsonl_path):
     skill_hits = {}
     tool_call_count = 0
     tok_input = tok_cache_create = tok_cache_read = tok_output = 0
-    first_ts = last_ts = None
+    all_ts = []
     try:
         with open(jsonl_path, encoding="utf-8") as f:
             for line in f:
@@ -223,10 +223,7 @@ def parse_jsonl_for_metadata(jsonl_path):
                     cwd = d.get("cwd")
                 ts = d.get("timestamp")
                 if ts:
-                    if first_ts is None or ts < first_ts:
-                        first_ts = ts
-                    if last_ts is None or ts > last_ts:
-                        last_ts = ts
+                    all_ts.append(ts)
                 msg = d.get("message", {})
                 # 抽 user 消息里的 <command-name>/xxx</command-name>
                 if d.get("type") == "user":
@@ -260,8 +257,10 @@ def parse_jsonl_for_metadata(jsonl_path):
                     elif name == "Bash":
                         cmd = (inp.get("command") or "").strip()
                         if cmd:
-                            head = cmd.split("\n", 1)[0][:80]
-                            cmd_hits[head] = cmd_hits.get(head, 0) + 1
+                            head = cmd.split("\n", 1)[0][:80].strip()
+                            # 过滤 heredoc 续行/单符号 noise(\, |, ;, &&, EOF 等)
+                            if len(head) >= 2 and re.search(r"[A-Za-z]", head):
+                                cmd_hits[head] = cmd_hits.get(head, 0) + 1
                     elif name in ("Task", "Agent"):
                         sub_type = inp.get("subagent_type") or "general-purpose"
                         desc = (inp.get("description") or "").strip()[:60]
@@ -271,12 +270,24 @@ def parse_jsonl_for_metadata(jsonl_path):
                             rec["examples"].append(desc)
     except Exception:
         pass
+    # duration:同一个 sessionId 可跨多天 resume,所以不能用 last-first wall clock
+    # 改成遍历相邻 ts,gap > 5min 不累加(代表 idle / 多天暂停),只算"活跃时长"
     duration_min = 0
-    if first_ts and last_ts:
+    wall_min = 0
+    IDLE_GAP_SEC = 300
+    if all_ts:
         try:
-            f0 = datetime.datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
-            f1 = datetime.datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-            duration_min = int((f1 - f0).total_seconds() / 60)
+            ts_sec = sorted(
+                datetime.datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
+                for t in all_ts
+            )
+            wall_min = int((ts_sec[-1] - ts_sec[0]) / 60)
+            active_sec = 0
+            for i in range(1, len(ts_sec)):
+                gap = ts_sec[i] - ts_sec[i - 1]
+                if gap <= IDLE_GAP_SEC:
+                    active_sec += gap
+            duration_min = int(active_sec / 60)
         except Exception:
             pass
     files = sorted(
@@ -295,7 +306,8 @@ def parse_jsonl_for_metadata(jsonl_path):
         [{"name": n, "count": c} for n, c in skill_hits.items()],
         key=lambda x: -x["count"],
     )
-    total_tokens = tok_input + tok_cache_create + tok_cache_read + tok_output
+    # total 只算真实出账(cache_read 是缓存命中字节数,不烧钱也不算工作量)
+    total_tokens = tok_input + tok_cache_create + tok_output
     return {
         "cwd": cwd or "",
         "project": derive_project(cwd),
@@ -312,6 +324,7 @@ def parse_jsonl_for_metadata(jsonl_path):
             "total": total_tokens,
         },
         "duration_min": duration_min,
+        "wall_min": wall_min,
     }
 
 
@@ -474,12 +487,20 @@ span.refresh-indicator{background:#aaa;cursor:default;color:#fff;font-size:11px;
 .session-meta-card .badge{display:inline-block;padding:2px 8px;font-size:11px;background:#36c;color:#fff;border-radius:10px;margin-right:6px}
 table.sessions td.project{color:#36c;font-size:12px}
 table.sessions td.num{text-align:right;color:#888;font-variant-numeric:tabular-nums;font-size:12px}
-table.files{width:100%;border-collapse:collapse;font-size:13px}
-table.files td,table.files th{padding:6px 10px;border-bottom:1px solid #0001;text-align:left;vertical-align:top}
+table.files{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
+table.files th:nth-child(2),table.files td:nth-child(2),
+table.files th:nth-child(3),table.files td:nth-child(3){width:72px}
+table.files th:nth-child(4),table.files td:nth-child(4){width:36%}
+table.files td,table.files th{padding:8px 12px;border-bottom:1px solid #0001;text-align:left;vertical-align:top}
 @media(prefers-color-scheme:dark){table.files td,table.files th{border-bottom-color:#fff2}}
-table.files td.fpath{font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
-table.files td.sids{font-size:11px;line-height:1.7}
-table.files td.sids a{margin-right:6px;color:#36c;text-decoration:none}
+table.files td.fpath{font-family:ui-monospace,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+table.files td.fpath:hover{white-space:normal;word-break:break-all;background:rgba(0,0,0,0.02)}
+@media(prefers-color-scheme:dark){table.files td.fpath:hover{background:rgba(255,255,255,0.03)}}
+table.files td.sids{font-size:11px;line-height:1.6}
+.sids-wrap{display:flex;flex-wrap:wrap;gap:4px}
+table.files td.sids a{padding:1px 7px;border-radius:4px;background:rgba(54,98,204,0.10);color:#36c;text-decoration:none;letter-spacing:0.2px}
+table.files td.sids a:hover{background:#36c;color:#fff}
+@media(prefers-color-scheme:dark){table.files td.sids a{background:rgba(54,98,204,0.20);color:#9bf}}
 .warn-long td{background:rgba(228,68,68,0.06)}
 @media(prefers-color-scheme:dark){.warn-long td{background:rgba(228,68,68,0.12)}}
 .warn-long td.count{color:#e44;font-weight:600}
@@ -966,6 +987,8 @@ scheduleRefresh();
 
 
 def fmt_tokens(n):
+    if n >= 1_000_000_000:
+        return f"{n/1_000_000_000:.2f}B"
     if n >= 1_000_000:
         return f"{n/1_000_000:.1f}M"
     if n >= 1000:
@@ -1080,7 +1103,8 @@ def render_index_html(rows, latest_sid, search_index, summaries=None, closed_sid
         p = r.get("project", "—")
         proj_counts[p] = proj_counts.get(p, 0) + 1
         tot_tok = (r.get("tokens") or {}).get("total", 0)
-        if r["count"] > 200 or tot_tok > 100_000:
+        # 超长阈值:消息 > 500 或真实出账 token > 5M(cache_read 已不计入)
+        if r["count"] > 500 or tot_tok > 5_000_000:
             long_count += 1
         if r["sid"] in closed_sids:
             pass
@@ -1117,7 +1141,7 @@ def render_index_html(rows, latest_sid, search_index, summaries=None, closed_sid
         active = ' active' if r["sid"] == latest_sid else ''
         tokens = r.get("tokens") or {}
         tot = tokens.get("total", 0)
-        is_long = r["count"] > 200 or tot > 100_000
+        is_long = r["count"] > 500 or tot > 5_000_000
         long_cls = " warn-long" if is_long else ""
         long_attr = "1" if is_long else "0"
         warn_mark = ' <span class="warn-mark">⚠</span>' if is_long else ""
@@ -1163,6 +1187,7 @@ def render_index_html(rows, latest_sid, search_index, summaries=None, closed_sid
 <a href="files.html">文件反向</a>
 <a href="commands.html">命令反向</a>
 <a href="workflows.html">工作流</a>
+<a href="knowledge-graph.html">知识图谱</a>
 </nav>
 <div id="chips-wrap" class="chips">{chips_html}</div>
 {tag_chips_html}
@@ -1187,6 +1212,875 @@ def render_index_html(rows, latest_sid, search_index, summaries=None, closed_sid
 <script id="search-data" type="application/json">{index_json_safe}</script>
 <script>{INDEX_JS}</script>
 </body></html>"""
+
+
+def render_knowledge_graph_html(rows, summaries):
+    """知识图谱页:tag + session 双节点 force-directed graph。"""
+    tag_to_sessions = {}
+    session_data = {}
+    tag_pairs = {}  # (tag_a, tag_b) → 共现 session 数
+    mtime_min = None
+    mtime_max = None
+    for r in rows:
+        sm = summaries.get(r["sid"], {})
+        tags = [t for t in (sm.get("tags") or []) if isinstance(t, str) and t.strip()]
+        if not tags:
+            continue
+        mt = r.get("mtime", 0)
+        if mtime_min is None or mt < mtime_min: mtime_min = mt
+        if mtime_max is None or mt > mtime_max: mtime_max = mt
+        tokens_total = (r.get("tokens") or {}).get("total", 0)
+        session_data[r["sid"]] = {
+            "sid": r["sid"],
+            "short": r["sid"][:8],
+            "summary": (sm.get("summary") or r.get("preview") or "—")[:120],
+            "tags": tags,
+            "project": r.get("project", "—"),
+            "mtime_str": r["mtime_str"],
+            "mtime_ts": mt,
+            "msg_count": r.get("count", 0),
+            "tokens_total": tokens_total,
+        }
+        for t in tags:
+            tag_to_sessions.setdefault(t, []).append(r["sid"])
+        # tag 共现统计
+        sorted_tags = sorted(tags)
+        for i in range(len(sorted_tags)):
+            for j in range(i + 1, len(sorted_tags)):
+                key = (sorted_tags[i], sorted_tags[j])
+                tag_pairs[key] = tag_pairs.get(key, 0) + 1
+    nodes = []
+    links = []
+    for tag, sids in tag_to_sessions.items():
+        nodes.append({
+            "id": "tag:" + tag,
+            "type": "tag",
+            "label": tag,
+            "size": len(sids),
+        })
+    for sid, meta in session_data.items():
+        nodes.append({
+            "id": "sid:" + sid,
+            "type": "session",
+            "label": meta["short"],
+            "data": meta,
+        })
+    # 给每个 session 算 "dominant tag" — 该 session 5 个 tag 里出现次数最多的(整图最热门的那个)
+    # 用作颜色编码,让同主题 session 染同色
+    for sid, meta in session_data.items():
+        tag_freq = [(t, len(tag_to_sessions.get(t, []))) for t in meta["tags"]]
+        if tag_freq:
+            tag_freq.sort(key=lambda x: -x[1])
+            meta["dominant_tag"] = tag_freq[0][0]
+        else:
+            meta["dominant_tag"] = "?"
+    # tag-session 边
+    for tag, sids in tag_to_sessions.items():
+        for sid in sids:
+            links.append({"source": "tag:" + tag, "target": "sid:" + sid, "type": "ts"})
+    # tag-tag 共现边(≥2 次共现,避免太密)
+    MIN_COOCCUR = 2
+    n_tag_tag = 0
+    for (a, b), count in tag_pairs.items():
+        if count < MIN_COOCCUR:
+            continue
+        links.append({"source": "tag:" + a, "target": "tag:" + b, "type": "tt", "weight": count})
+        n_tag_tag += 1
+    # 时间窗口给前端用
+    mtime_range = {"min": mtime_min or 0, "max": mtime_max or 0}
+
+    data_json = json.dumps({"nodes": nodes, "links": links, "mtime_range": mtime_range}, ensure_ascii=False).replace("</", "<\\/")
+    n_tags = len(tag_to_sessions)
+    n_sessions = len(session_data)
+    n_links = len(links)
+    n_ts_links = n_links - n_tag_tag
+    # 统计:出现最多的 tag top 10
+    top_tags = sorted(tag_to_sessions.items(), key=lambda kv: -len(kv[1]))[:15]
+    top_tags_html = "".join(
+        f'<li><a href="#" data-tag="{esc(t)}" class="tag-pill">{esc(t)}<span class="ct">{len(s)}</span></a></li>'
+        for t, s in top_tags
+    )
+
+    tpl = """<!doctype html><html><head><meta charset="utf-8"><title>知识图谱</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>__SHARED_CSS__
+body{padding:0;max-width:none;margin:0}
+.kg-layout{display:grid;grid-template-columns:280px 1fr;height:100vh;overflow:hidden}
+.kg-sidebar{padding:16px 18px;border-right:1px solid #0001;background:#fafaf8;overflow-y:auto}
+@media(prefers-color-scheme:dark){.kg-sidebar{background:#1a1a1a;border-right-color:#fff2}}
+.kg-sidebar h3{margin:18px 0 8px;font-size:13px;color:#888;text-transform:uppercase;letter-spacing:0.5px}
+.kg-stats{font-size:12px;color:#666;line-height:1.6}
+@media(prefers-color-scheme:dark){.kg-stats{color:#aaa}}
+.kg-stats strong{color:#36c}
+.tag-pill-list{list-style:none;padding:0;margin:0}
+.tag-pill-list li{margin:4px 0}
+.tag-pill{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;font-size:12px;background:rgba(0,0,0,0.04);border-radius:14px;color:#333;text-decoration:none}
+@media(prefers-color-scheme:dark){.tag-pill{background:rgba(255,255,255,0.06);color:#ddd}}
+.tag-pill:hover{background:#36c;color:#fff}
+.tag-pill.active{background:#36c;color:#fff;font-weight:600}
+.tag-pill .ct{font-size:11px;opacity:0.7;margin-left:6px}
+.kg-canvas{position:relative;overflow:hidden}
+.kg-canvas svg{width:100%;height:100%;cursor:grab}
+.kg-canvas svg:active{cursor:grabbing}
+.kg-tooltip{position:absolute;background:rgba(20,20,20,0.95);color:#fff;padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.5;pointer-events:none;max-width:340px;z-index:100;display:none}
+.kg-tooltip.show{display:block}
+.kg-tooltip .tt-title{font-weight:600;font-size:13px;margin-bottom:4px}
+.kg-tooltip .tt-meta{color:#aaa;font-size:11px;margin-bottom:6px}
+.kg-tooltip .tt-tags{margin-top:6px}
+.kg-tooltip .tt-tag{display:inline-block;background:rgba(54,98,204,0.4);padding:2px 7px;border-radius:9px;font-size:10px;margin-right:4px;margin-bottom:3px}
+.kg-controls{position:absolute;top:14px;right:14px;background:#fff;padding:8px 10px;border-radius:8px;font-size:12px;display:flex;flex-direction:column;gap:6px;border:1px solid #0001}
+@media(prefers-color-scheme:dark){.kg-controls{background:#222;border-color:#fff2}}
+.kg-controls button{padding:4px 10px;font-size:11px;border:1px solid #0002;background:transparent;border-radius:4px;cursor:pointer;color:inherit}
+@media(prefers-color-scheme:dark){.kg-controls button{border-color:#fff3}}
+.kg-controls button:hover{background:#36c;color:#fff;border-color:#36c}
+.node-tag{fill:#36c}
+.node-session{fill:#888}
+.node-session.highlighted{stroke:#3a7;stroke-width:3px}
+.node-tag.highlighted{stroke:#c80;stroke-width:3px}
+.node-session.dimmed,.node-tag.dimmed{opacity:0.15}
+.link{stroke:#0002;stroke-width:1px}
+.link.tt{stroke:#c80;stroke-width:1.5px;stroke-opacity:0.4;stroke-dasharray:3,3}
+.link.highlighted{stroke:#36c;stroke-width:2.5px;stroke-opacity:0.9}
+.link.dimmed{opacity:0.05}
+@media(prefers-color-scheme:dark){.link{stroke:#fff3}}
+.node-label{font-size:11px;fill:#333;pointer-events:none;font-family:-apple-system,sans-serif;text-anchor:middle}
+@media(prefers-color-scheme:dark){.node-label{fill:#ddd}}
+.node-label.tag-label{font-weight:600;font-size:12px}
+.node-label.session-label{font-size:9px;opacity:0.7;font-family:ui-monospace,monospace}
+.hull-path{pointer-events:none}
+.hull-label{pointer-events:none;font-family:-apple-system,sans-serif}
+</style></head><body>
+<header class="top" style="padding:10px 16px">
+<strong>知识图谱 · 跨 session tag 关联</strong>
+<input id="kg-search" placeholder="搜 tag / session sid / 摘要..." style="flex:1;max-width:340px;margin:0 16px;padding:6px 10px;font-size:13px;border:1px solid #0002;border-radius:6px;background:transparent;color:inherit">
+<span class="meta-info">__N_SESSIONS__ session · __N_TAGS__ tag · __N_TS_LINKS__ tag→session · __N_TAG_TAG__ tag↔tag</span>
+</header>
+<nav class="tabs" style="padding:0 16px">
+<a href="index.html">Sessions</a>
+<a href="files.html">文件反向</a>
+<a href="commands.html">命令反向</a>
+<a href="workflows.html">工作流</a>
+<a href="knowledge-graph.html" class="active">知识图谱</a>
+</nav>
+<div class="kg-layout">
+<aside class="kg-sidebar">
+<div class="kg-stats">
+全图共 <strong>__N_SESSIONS__</strong> session 和 <strong>__N_TAGS__</strong> tag,<strong>__N_LINKS__</strong> 条连接。<br><br>
+<strong>用法:</strong>
+<ul style="padding-left:18px;line-height:1.7;margin:6px 0;font-size:11px">
+<li>蓝色大节点 = tag,小节点 = session</li>
+<li>session 颜色 = 主题(同色同 cluster)</li>
+<li>session 大小 = token 烧得多就大</li>
+<li>session 越新越鲜艳</li>
+<li>橙色虚线 = tag↔tag 共现</li>
+<li>拖节点固定位置</li>
+<li>hover 看摘要</li>
+<li>单击 session 跳详情页</li>
+<li>单击 tag 高亮关联</li>
+<li><strong>双击</strong>聚焦子图(2 跳邻居)</li>
+<li>虚线圈 = 自动识别的主题集团</li>
+<li>顶部搜索 / 右上保存 PNG</li>
+</ul>
+</div>
+<h3>热门标签 (top 15)</h3>
+<ul class="tag-pill-list">__TOP_TAGS_HTML__</ul>
+</aside>
+<div class="kg-canvas" id="kg-canvas">
+<svg id="kg-svg"></svg>
+<div class="kg-tooltip" id="kg-tooltip"></div>
+<div class="kg-controls">
+<button id="kg-toggle-hulls">⌬ 切换主题圈</button>
+<button id="kg-reset-zoom">重置缩放</button>
+<button id="kg-clear-highlight">取消聚焦</button>
+<button id="kg-download-png">📷 保存 PNG</button>
+<button id="kg-export-md">导出 Markdown 大纲</button>
+<button id="kg-export-mindmap">导出思维导图 PNG</button>
+</div>
+</div>
+</div>
+<script id="kg-data" type="application/json">__DATA_JSON__</script>
+<script>
+const data = JSON.parse(document.getElementById('kg-data').textContent);
+const svg = d3.select('#kg-svg');
+const canvas = document.getElementById('kg-canvas');
+const width = canvas.clientWidth;
+const height = canvas.clientHeight;
+const tooltip = document.getElementById('kg-tooltip');
+
+// zoom(filter 关掉 dblclick,避免跟自定义双击聚焦打架)
+const zoomG = svg.append('g').attr('class','zoom-layer');
+const zoomBehavior = d3.zoom().scaleExtent([0.2, 5])
+  .filter(e => e.type !== 'dblclick')
+  .on('zoom', (e) => zoomG.attr('transform', e.transform));
+svg.call(zoomBehavior);
+
+// hull layer(community 背景圈,在 link 下)
+const hullG = zoomG.append('g').attr('class', 'hulls');
+const hullLabelG = zoomG.append('g').attr('class', 'hull-labels');
+
+// force simulation
+const sim = d3.forceSimulation(data.nodes)
+  .force('link', d3.forceLink(data.links).id(d => d.id).distance(d => d.source.type === 'tag' ? 80 : 60).strength(0.4))
+  .force('charge', d3.forceManyBody().strength(d => d.type === 'tag' ? -200 : -50))
+  .force('center', d3.forceCenter(width/2, height/2))
+  .force('collide', d3.forceCollide().radius(d => d.type === 'tag' ? 14 + Math.min(d.size, 10) : 8));
+
+// 项目颜色 hash:同项目同色
+function hashColor(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue}, 60%, 58%)`;
+}
+
+// Label Propagation community detection(简化 Louvain,零外部依赖)
+function detectCommunities(nodes, links, iterations) {
+  iterations = iterations || 15;
+  const adj = {};
+  nodes.forEach(n => { adj[n.id] = []; });
+  links.forEach(l => {
+    const s = typeof l.source === 'object' ? l.source.id : l.source;
+    const t = typeof l.target === 'object' ? l.target.id : l.target;
+    const w = l.weight || (l.type === 'tt' ? 2 : 1);  // tag-tag 权重高(主题更紧密)
+    adj[s].push({neighbor: t, weight: w});
+    adj[t].push({neighbor: s, weight: w});
+  });
+  const labels = {};
+  nodes.forEach(n => { labels[n.id] = n.id; });
+  // deterministic order:用 node.id hash 排序,保证每次刷新结果一致
+  function _hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+  const baseOrder = nodes.map(n => n.id).sort((a, b) => _hash(a) - _hash(b));
+  for (let iter = 0; iter < iterations; iter++) {
+    let changed = false;
+    // 每次迭代用同一固定顺序(不再 random),community 稳定
+    const order = baseOrder;
+    for (const id of order) {
+      const freq = {};
+      for (const {neighbor, weight} of adj[id]) {
+        const lbl = labels[neighbor];
+        freq[lbl] = (freq[lbl] || 0) + weight;
+      }
+      let best = labels[id], maxF = -1;
+      for (const [lbl, f] of Object.entries(freq)) {
+        if (f > maxF || (f === maxF && lbl < best)) { maxF = f; best = lbl; }
+      }
+      if (best !== labels[id]) {
+        labels[id] = best;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  return labels;
+}
+// 跑 community detection,给每个 node 加 community 字段
+const communityLabels = detectCommunities(data.nodes, data.links);
+data.nodes.forEach(n => { n.community = communityLabels[n.id]; });
+// 统计每个 community 的成员 + 主题(取 community 内 tag 节点 size 最大的 label 作为 cluster name)
+const communityInfo = {};
+data.nodes.forEach(n => {
+  const c = n.community;
+  if (!communityInfo[c]) communityInfo[c] = {members: [], topTag: null, topTagId: null, tagSize: -1};
+  communityInfo[c].members.push(n);
+  if (n.type === 'tag' && n.size > communityInfo[c].tagSize) {
+    communityInfo[c].topTag = n.label;
+    communityInfo[c].topTagId = n.id;
+    communityInfo[c].tagSize = n.size;
+  }
+});
+
+// 时间渐变 opacity:新 session 不透明,老的浅
+const mtRange = data.mtime_range || {min: 0, max: 1};
+function timeOpacity(ts) {
+  if (!ts || mtRange.max === mtRange.min) return 1;
+  const norm = (ts - mtRange.min) / (mtRange.max - mtRange.min);
+  return 0.35 + norm * 0.65;  // 老 0.35 → 新 1.0
+}
+
+const link = zoomG.append('g').attr('class','links').selectAll('line')
+  .data(data.links).join('line')
+  .attr('class', d => 'link ' + (d.type || 'ts'))
+  .attr('stroke-width', d => d.type === 'tt' ? 1 + Math.min(d.weight || 1, 4) * 0.3 : 1);
+
+const node = zoomG.append('g').attr('class','nodes').selectAll('g')
+  .data(data.nodes).join('g')
+  .attr('class', d => d.type === 'tag' ? 'node-tag-group' : 'node-session-group')
+  .call(d3.drag()
+    .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+    .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+    .on('end', (e, d) => {
+      if (!e.active) sim.alphaTarget(0);
+      // C1: 保留拖完位置但允许微调
+    }));
+
+// session 节点大小:tokens 量编码(log scale,大节点 = 烧 token 多)
+// 区间设计:无 token → 6px,1K → ~8px,1M → ~13px,1B → ~18px
+function sessionRadius(d) {
+  const tot = (d.data && d.data.tokens_total) || 0;
+  if (tot <= 0) return 6;
+  return Math.max(6, Math.min(18, 5 + Math.log10(tot + 1) * 1.5));
+}
+
+node.append('circle')
+  .attr('r', d => d.type === 'tag' ? Math.max(10, 8 + Math.sqrt(d.size) * 3) : sessionRadius(d))
+  .attr('class', d => d.type === 'tag' ? 'node-tag' : 'node-session')
+  .attr('fill', d => {
+    if (d.type === 'tag') return '#36c';
+    // session 颜色 = dominant tag hash (同主题 session 同色,真正 cluster 化)
+    return hashColor(d.data.dominant_tag || d.data.project || 'unknown');
+  })
+  .attr('opacity', d => {
+    if (d.type === 'tag') return 1;
+    return timeOpacity(d.data.mtime_ts);
+  })
+  .attr('stroke', '#fff')
+  .attr('stroke-width', 1.5);
+
+node.append('text')
+  .attr('class', d => d.type === 'tag' ? 'node-label tag-label' : 'node-label session-label')
+  .attr('dy', d => d.type === 'tag' ? Math.max(20, 18 + Math.sqrt(d.size) * 2) : 14)
+  .text(d => d.label);
+
+// hull 渲染:每 community 一个凸包背景
+let showHulls = true;
+let tickCount = 0;
+function updateHulls() {
+  if (!showHulls) {
+    hullG.selectAll('path').remove();
+    hullLabelG.selectAll('text').remove();
+    return;
+  }
+  // C3 fix: 同时记 pts + node 引用,padding 计算改对象引用 O(N) 而非浮点比较 O(N*M)
+  const grouped = {};
+  data.nodes.forEach(n => {
+    if (n.community === undefined || n.x === undefined) return;
+    if (!grouped[n.community]) grouped[n.community] = {pts: [], nodes: []};
+    grouped[n.community].pts.push([n.x, n.y]);
+    grouped[n.community].nodes.push(n);
+  });
+  const hullData = Object.entries(grouped)
+    .filter(([_, g]) => g.pts.length >= 3)
+    .map(([id, g]) => {
+      const hull = d3.polygonHull(g.pts);
+      if (!hull) return null;
+      const cx = d3.mean(hull, d => d[0]);
+      const cy = d3.mean(hull, d => d[1]);
+      // padding = community 内最大节点半径 + 10
+      const maxR = Math.max(...g.nodes.map(n =>
+        n.type === 'tag' ? Math.max(10, 8 + Math.sqrt(n.size) * 3) : sessionRadius(n)
+      )) + 10;
+      const padded = hull.map(p => {
+        const dx = p[0] - cx, dy = p[1] - cy;
+        const d = Math.sqrt(dx*dx + dy*dy) || 1;
+        return [p[0] + dx/d * maxR, p[1] + dy/d * maxR];
+      });
+      return {id, hull: padded, cx, cy, info: communityInfo[id]};
+    })
+    .filter(x => x);
+  // 画 hull
+  hullG.selectAll('path').data(hullData, d => d.id).join(
+    enter => enter.append('path').attr('class', 'hull-path'),
+    update => update,
+    exit => exit.remove()
+  ).attr('d', d => 'M' + d.hull.map(p => p.join(',')).join('L') + 'Z')
+   .attr('fill', d => hashColor('com:' + d.id))
+   .attr('fill-opacity', 0.08)
+   .attr('stroke', d => hashColor('com:' + d.id))
+   .attr('stroke-opacity', 0.4)
+   .attr('stroke-width', 2)
+   .attr('stroke-dasharray', '4,4');
+  // 画 community 标签
+  hullLabelG.selectAll('text').data(hullData.filter(d => d.info && d.info.topTag && d.info.members.length >= 3), d => d.id).join(
+    enter => enter.append('text').attr('class', 'hull-label'),
+    update => update,
+    exit => exit.remove()
+  ).attr('x', d => d.cx)
+   .attr('y', d => Math.min(...d.hull.map(p => p[1])) - 8)
+   .attr('text-anchor', 'middle')
+   .attr('fill', d => hashColor('com:' + d.id))
+   .attr('font-weight', 700)
+   .attr('font-size', 13)
+   .attr('opacity', 0.9)
+   .text(d => '⌬ ' + d.info.topTag + ' (' + d.info.members.length + ')');
+}
+
+sim.on('tick', () => {
+  link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  node.attr('transform', d => `translate(${d.x},${d.y})`);
+  tickCount++;
+  // A3 fix: 前期(alpha>0.1)每 10 tick 节流;收敛区(alpha<0.1)节点几乎不动,不必每帧更新
+  if (tickCount % 10 === 0) updateHulls();
+});
+sim.on('end', () => updateHulls());  // 完全收敛后兜底更新一次
+
+// hover tooltip
+node.on('mouseenter', (e, d) => {
+  let html = '';
+  if (d.type === 'tag') {
+    html = '<div class="tt-title">' + escapeHTML(d.label) + '</div><div class="tt-meta">tag · ' + d.size + ' 个 session 用过</div>';
+  } else {
+    const m = d.data;
+    html = '<div class="tt-title">' + escapeHTML(m.short) + ' · ' + escapeHTML(m.project) + '</div>';
+    html += '<div class="tt-meta">' + escapeHTML(m.mtime_str) + ' · ' + m.msg_count + ' msgs</div>';
+    html += escapeHTML(m.summary);
+    html += '<div class="tt-tags">' + m.tags.map(t => '<span class="tt-tag">'+escapeHTML(t)+'</span>').join('') + '</div>';
+  }
+  tooltip.innerHTML = html;
+  tooltip.classList.add('show');
+}).on('mousemove', (e) => {
+  tooltip.style.left = Math.min(e.pageX + 14, window.innerWidth - 360) + 'px';
+  tooltip.style.top = (e.pageY + 14) + 'px';
+}).on('mouseleave', () => tooltip.classList.remove('show'));
+
+// click 加 250ms 延迟,让 dblclick 有机会先触发取消跳转
+const clickTimers = {};
+node.on('click', (e, d) => {
+  e.stopPropagation();
+  if (clickTimers[d.id]) clearTimeout(clickTimers[d.id]);
+  clickTimers[d.id] = setTimeout(() => {
+    delete clickTimers[d.id];  // B1: 完成后从 map 删,避免膨胀
+    if (d.type === 'session') {
+      window.location.href = d.data.sid + '.html';
+    } else if (d.type === 'tag') {
+      highlightTag(d.label);
+    }
+  }, 250);
+});
+
+// 双击聚焦子图(只显示 root + 1 跳 + 2 跳邻居)
+function focusSubgraph(rootId) {
+  const keep = new Set([rootId]);
+  // BFS 2 跳
+  for (let depth = 0; depth < 2; depth++) {
+    const expansion = new Set();
+    data.links.forEach(l => {
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      if (keep.has(sId)) expansion.add(tId);
+      if (keep.has(tId)) expansion.add(sId);
+    });
+    expansion.forEach(x => keep.add(x));
+  }
+  node.selectAll('circle')
+    .classed('dimmed', d => !keep.has(d.id))
+    .classed('highlighted', d => d.id === rootId);
+  link.classed('dimmed', l => {
+    const sId = typeof l.source === 'object' ? l.source.id : l.source;
+    const tId = typeof l.target === 'object' ? l.target.id : l.target;
+    return !keep.has(sId) || !keep.has(tId);
+  });
+}
+node.on('dblclick', (e, d) => {
+  e.stopPropagation();
+  e.preventDefault();
+  // 取消同节点的延迟 click(避免双击同时触发跳页)
+  if (clickTimers[d.id]) {
+    clearTimeout(clickTimers[d.id]);
+    delete clickTimers[d.id];  // B1: 清掉防止 map 膨胀
+  }
+  focusSubgraph(d.id);
+});
+// 双击空白(SVG 自己)恢复
+svg.on('dblclick.background', function(e) {
+  if (e.target === this || e.target.tagName === 'svg' || e.target.classList.contains('zoom-layer')) {
+    clearHighlight();
+  }
+});
+
+// 高亮某 tag 所有关联
+function highlightTag(tagName) {
+  const tagId = 'tag:' + tagName;
+  const relatedSids = new Set();
+  data.links.forEach(l => {
+    const sId = typeof l.source === 'object' ? l.source.id : l.source;
+    const tId = typeof l.target === 'object' ? l.target.id : l.target;
+    if (sId === tagId) relatedSids.add(tId);
+    if (tId === tagId) relatedSids.add(sId);
+  });
+  node.classed('highlighted', false);
+  node.selectAll('circle').classed('highlighted', d => d.id === tagId || relatedSids.has(d.id));
+  link.classed('highlighted', l => {
+    const sId = typeof l.source === 'object' ? l.source.id : l.source;
+    const tId = typeof l.target === 'object' ? l.target.id : l.target;
+    return sId === tagId || tId === tagId;
+  });
+  document.querySelectorAll('.tag-pill').forEach(p => p.classList.toggle('active', p.dataset.tag === tagName));
+}
+
+function clearHighlight() {
+  node.selectAll('circle').classed('highlighted', false).classed('dimmed', false);
+  link.classed('highlighted', false).classed('dimmed', false);
+  document.querySelectorAll('.tag-pill').forEach(p => p.classList.remove('active'));
+  const si = document.getElementById('kg-search');
+  if (si) si.value = '';
+}
+
+// 搜索 filter
+const searchInput = document.getElementById('kg-search');
+if (searchInput) {
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) {
+      node.selectAll('circle').classed('dimmed', false).classed('highlighted', false);
+      link.classed('dimmed', false);
+      return;
+    }
+    const matchedIds = new Set();
+    data.nodes.forEach(n => {
+      let hit = false;
+      if (n.label && n.label.toLowerCase().includes(q)) hit = true;
+      if (n.type === 'session' && n.data) {
+        if ((n.data.summary || '').toLowerCase().includes(q)) hit = true;
+        if ((n.data.project || '').toLowerCase().includes(q)) hit = true;
+        if (n.data.sid && n.data.sid.toLowerCase().includes(q)) hit = true;
+        if ((n.data.tags || []).some(t => t.toLowerCase().includes(q))) hit = true;
+      }
+      if (hit) matchedIds.add(n.id);
+    });
+    node.selectAll('circle')
+      .classed('highlighted', d => matchedIds.has(d.id))
+      .classed('dimmed', d => !matchedIds.has(d.id));
+    link.classed('dimmed', l => {
+      const sId = typeof l.source === 'object' ? l.source.id : l.source;
+      const tId = typeof l.target === 'object' ? l.target.id : l.target;
+      return !matchedIds.has(sId) && !matchedIds.has(tId);
+    });
+  });
+}
+
+document.querySelectorAll('.tag-pill').forEach(p => {
+  p.addEventListener('click', (e) => {
+    e.preventDefault();
+    highlightTag(p.dataset.tag);
+  });
+});
+
+document.getElementById('kg-clear-highlight').addEventListener('click', clearHighlight);
+document.getElementById('kg-toggle-hulls').addEventListener('click', () => {
+  showHulls = !showHulls;
+  updateHulls();
+});
+document.getElementById('kg-reset-zoom').addEventListener('click', () => {
+  // 用同一 zoomBehavior 实例(B3),避免状态错位
+  svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity);
+  sim.alpha(0.5).restart();
+});
+
+// === 知识树导出 ===
+// 纯 tag 结构:community(主题)→ 该社区内 tag(按热度 top N)。session 不进图。
+const TAGS_PER_COMMUNITY = 10;
+const MIN_TAGS_IN_COMMUNITY = 2;
+
+function buildKnowledgeTree() {
+  // 按 community 收集 tag 节点(过滤 session)
+  const byCom = {};
+  data.nodes.forEach(n => {
+    if (n.type !== 'tag' || n.community === undefined) return;
+    if (!byCom[n.community]) byCom[n.community] = [];
+    byCom[n.community].push(n);
+  });
+  // 每个 tag 算"被多少 session 用过"(从 ts link 数,fallback tag.size)
+  const tagSessionCount = {};
+  data.links.forEach(l => {
+    if (l.type !== 'ts') return;
+    const src = typeof l.source === 'object' ? l.source.id : l.source;
+    const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+    const tagId = src.startsWith('tag:') ? src : (tgt.startsWith('tag:') ? tgt : null);
+    if (!tagId) return;
+    tagSessionCount[tagId] = (tagSessionCount[tagId] || 0) + 1;
+  });
+
+  const tree = {name: '知识图 · ' + new Date().toISOString().slice(0,10), children: []};
+  const comIds = Object.keys(byCom)
+    .filter(c => byCom[c].length >= MIN_TAGS_IN_COMMUNITY)
+    .sort((a, b) => byCom[b].length - byCom[a].length);
+
+  for (const cid of comIds) {
+    const tags = byCom[cid].slice().sort((a, b) => (b.size || 0) - (a.size || 0));
+    const info = communityInfo[cid] || {};
+    // L1 名 = 该 community 最热 tag(代表性主题词)
+    const topTag = info.topTag || tags[0].label;
+    const topTagId = info.topTagId || tags[0].id;
+    const comNode = {name: topTag, children: []};
+    // L2:其他 tag(用 id 过滤,避免同名 tag 误删)
+    const innerTags = tags
+      .filter(t => t.id !== topTagId)
+      .slice(0, TAGS_PER_COMMUNITY);
+    for (const t of innerTags) {
+      const cnt = tagSessionCount[t.id] || t.size || 0;
+      comNode.children.push({name: cnt > 1 ? `${t.label} (${cnt})` : t.label});
+    }
+    if (comNode.children.length > 0) tree.children.push(comNode);
+  }
+  return tree;
+}
+
+function treeToMarkdown(tree) {
+  const lines = [`# ${tree.name}`, ''];
+  function walk(node, depth) {
+    const indent = '  '.repeat(depth);
+    lines.push(`${indent}- ${node.name}`);
+    (node.children || []).forEach(c => walk(c, depth + 1));
+  }
+  (tree.children || []).forEach(c => walk(c, 0));
+  return lines.join(String.fromCharCode(10));
+}
+
+function xmlEsc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// 用 D3 horizontal tree layout 渲染思维导图 SVG → PNG
+function exportMindmapPng() {
+  const tree = buildKnowledgeTree();
+  const root = d3.hierarchy(tree, d => d.children);
+  // 截断过长 label,留 tooltip 不影响 PNG
+  root.descendants().forEach(d => {
+    const t = d.data.name;
+    d.data._display = t.length > 26 ? t.slice(0, 26) + '…' : t;
+  });
+  const leafCount = Math.max(root.leaves().length, 8);
+  const nodeVGap = 32;
+  const colGap = 280;
+  const margin = {top: 60, right: 80, bottom: 60, left: 80};
+  const innerHeight = leafCount * nodeVGap;
+  const innerWidth = (root.height) * colGap;
+  const width = innerWidth + margin.left + margin.right + 320;
+  const height = innerHeight + margin.top + margin.bottom;
+  const layout = d3.tree().size([innerHeight, innerWidth]);
+  layout(root);
+
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNs, 'svg');
+  svg.setAttribute('xmlns', svgNs);
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+  const bg = document.createElementNS(svgNs, 'rect');
+  bg.setAttribute('width', width); bg.setAttribute('height', height); bg.setAttribute('fill', '#fafaf8');
+  svg.appendChild(bg);
+
+  // 根节点居中,所有坐标偏移 margin
+  const offsetX = margin.left;
+  const offsetY = margin.top;
+  // 颜色板(按 community 序号)
+  const palette = ['#36c', '#0aa', '#c80', '#a85', '#a7c', '#3a7', '#c5b', '#5a9', '#d72', '#48a'];
+  // 给每个 community 一级节点分配色板
+  const comColor = {};
+  root.children && root.children.forEach((c, i) => { comColor[c.data.name] = palette[i % palette.length]; });
+
+  // 链接(贝塞尔曲线)
+  const linkG = document.createElementNS(svgNs, 'g');
+  svg.appendChild(linkG);
+  root.descendants().slice(1).forEach(d => {
+    let topCom = d;
+    while (topCom.depth > 1) topCom = topCom.parent;
+    const color = comColor[topCom.data.name] || '#888';
+    const sx = d.parent.y + offsetX, sy = d.parent.x + offsetY;
+    const tx = d.y + offsetX, ty = d.x + offsetY;
+    const mx = (sx + tx) / 2;
+    const path = document.createElementNS(svgNs, 'path');
+    path.setAttribute('d', `M${sx},${sy}C${mx},${sy} ${mx},${ty} ${tx},${ty}`);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-opacity', d.depth === 1 ? 0.9 : 0.5);
+    path.setAttribute('stroke-width', d.depth === 1 ? 2.2 : 1.4);
+    linkG.appendChild(path);
+  });
+
+  // 节点
+  const nodeG = document.createElementNS(svgNs, 'g');
+  svg.appendChild(nodeG);
+  root.descendants().forEach(d => {
+    const x = d.y + offsetX, y = d.x + offsetY;
+    const text = d.data._display;
+    // 中文宽度估算
+    const charW = 13;
+    const padX = 14;
+    const minW = 60;
+    const w = Math.min(280, Math.max(minW, text.length * charW + padX * 2));
+    const h = d.depth === 0 ? 38 : 28;
+    let topCom = d;
+    while (topCom.depth > 1) topCom = topCom.parent;
+    const accent = comColor[topCom && topCom.data ? topCom.data.name : ''] || '#36c';
+    const isRoot = d.depth === 0;
+    const isCom = d.depth === 1;
+
+    const rect = document.createElementNS(svgNs, 'rect');
+    rect.setAttribute('x', x - w/2);
+    rect.setAttribute('y', y - h/2);
+    rect.setAttribute('width', w);
+    rect.setAttribute('height', h);
+    rect.setAttribute('rx', 8);
+    rect.setAttribute('fill', isRoot ? '#1a1a1a' : (isCom ? accent : '#fff'));
+    rect.setAttribute('stroke', isRoot ? '#000' : accent);
+    rect.setAttribute('stroke-width', isCom ? 0 : 1.5);
+    nodeG.appendChild(rect);
+
+    const tElem = document.createElementNS(svgNs, 'text');
+    tElem.setAttribute('x', x);
+    tElem.setAttribute('y', y + 4);
+    tElem.setAttribute('text-anchor', 'middle');
+    tElem.setAttribute('font-family', '-apple-system, BlinkMacSystemFont, sans-serif');
+    tElem.setAttribute('font-size', isRoot ? 16 : (isCom ? 13 : 12));
+    tElem.setAttribute('font-weight', isRoot ? '700' : (isCom ? '600' : '500'));
+    tElem.setAttribute('fill', isRoot ? '#fff' : (isCom ? '#fff' : '#333'));
+    tElem.textContent = text;
+    nodeG.appendChild(tElem);
+  });
+
+  // serialize
+  const serializer = new XMLSerializer();
+  const svgStr = serializer.serializeToString(svg);
+  const blob = new Blob([svgStr], {type: 'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    // canvas 上限 16384 (Chrome/Firefox);iOS Safari 4096。clamp 防 worst-case 静默白图
+    const MAX_DIM = 16384;
+    const scale = Math.min(2, MAX_DIM / Math.max(width, height));
+    canvas.width = Math.floor(width * scale);
+    canvas.height = Math.floor(height * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fafaf8';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    canvas.toBlob(b => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      a.download = `mindmap-${new Date().toISOString().slice(0,10)}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+    }, 'image/png');
+  };
+  img.onerror = () => alert('SVG 转 PNG 失败');
+  img.src = url;
+}
+
+function downloadText(filename, content, mime) {
+  const blob = new Blob([content], {type: (mime || 'text/plain') + ';charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+document.getElementById('kg-export-md').addEventListener('click', () => {
+  const tree = buildKnowledgeTree();
+  const md = treeToMarkdown(tree);
+  const ts = new Date().toISOString().slice(0,10);
+  downloadText(`knowledge-tree-${ts}.md`, md, 'text/markdown');
+});
+
+document.getElementById('kg-export-mindmap').addEventListener('click', exportMindmapPng);
+
+// 截图 PNG:svg → canvas → png download
+let pngBusy = false;
+document.getElementById('kg-download-png').addEventListener('click', (e) => {
+  if (pngBusy) return;  // A1 fix: 防 5s 内连点并发
+  pngBusy = true;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  const origText = btn.textContent;
+  btn.textContent = '⏳ 导出中...';
+  // 暂停 simulation 避免导出时节点抖动
+  sim.stop();
+  const svgEl = document.getElementById('kg-svg');
+  // inline 必要 styles 到 svg(否则 image 渲染时 css 类不生效)
+  const allElems = svgEl.querySelectorAll('*');
+  const tmpStyles = [];
+  allElems.forEach(el => {
+    const cs = window.getComputedStyle(el);
+    const props = ['fill','stroke','stroke-width','stroke-dasharray','opacity','font-size','font-family','font-weight','text-anchor'];
+    const inlined = {};
+    props.forEach(p => {
+      const v = cs.getPropertyValue(p);
+      if (v) {
+        inlined[p] = el.style.getPropertyValue(p);
+        el.style.setProperty(p, v);
+      }
+    });
+    tmpStyles.push({el, inlined});
+  });
+  const w = svgEl.clientWidth, h = svgEl.clientHeight;
+  const scale = 2;  // retina
+  const serializer = new XMLSerializer();
+  const cloned = svgEl.cloneNode(true);
+  cloned.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  cloned.setAttribute('width', w);
+  cloned.setAttribute('height', h);
+  const svgStr = serializer.serializeToString(cloned);
+  // 恢复原 inline style
+  tmpStyles.forEach(({el, inlined}) => {
+    Object.entries(inlined).forEach(([k, v]) => {
+      if (v) el.style.setProperty(k, v);
+      else el.style.removeProperty(k);
+    });
+  });
+  const blob = new Blob([svgStr], {type: 'image/svg+xml;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  // A1 fix: done flag 让三路径互斥,避免重复 cleanup / 重复 restart sim
+  let pngDone = false;
+  function finalizePng(msg) {
+    if (pngDone) return;
+    pngDone = true;
+    URL.revokeObjectURL(url);
+    sim.alpha(0.1).restart();
+    // 恢复按钮
+    pngBusy = false;
+    btn.disabled = false;
+    btn.textContent = origText;
+    if (msg) alert(msg);
+  }
+  img.onload = () => {
+    if (pngDone) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    const ctx = canvas.getContext('2d');
+    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    ctx.fillStyle = isDark ? '#0f1115' : '#fafaf8';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0, w, h);
+    canvas.toBlob(b => {
+      if (!b) { finalizePng('截图失败,浏览器可能不支持'); return; }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b);
+      const ts = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+      a.download = `knowledge-graph-${ts}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      finalizePng();
+    }, 'image/png');
+  };
+  img.onerror = () => finalizePng('SVG 转 PNG 失败,可能含浏览器不支持的元素');
+  setTimeout(() => finalizePng(), 5000);
+  img.src = url;
+});
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body></html>"""
+    return (tpl
+        .replace("__SHARED_CSS__", CSS)
+        .replace("__N_SESSIONS__", str(n_sessions))
+        .replace("__N_TAGS__", str(n_tags))
+        .replace("__N_LINKS__", str(n_links))
+        .replace("__N_TS_LINKS__", str(n_ts_links))
+        .replace("__N_TAG_TAG__", str(n_tag_tag))
+        .replace("__TOP_TAGS_HTML__", top_tags_html)
+        .replace("__DATA_JSON__", data_json)
+    )
 
 
 def render_workflows_html(rows, summaries):
@@ -1267,6 +2161,7 @@ def render_workflows_html(rows, summaries):
 <a href="files.html">文件反向</a>
 <a href="commands.html">命令反向</a>
 <a href="workflows.html" class="active">工作流</a>
+<a href="knowledge-graph.html">知识图谱</a>
 </nav>
 {summary_html}
 {chr(10).join(pattern_sections)}
@@ -1298,10 +2193,10 @@ def render_commands_html(rows):
         )
         body.append(
             f'<tr>'
-            f'<td class="fpath">{esc(cmd)}</td>'
+            f'<td class="fpath" title="{esc(cmd)}">{esc(cmd)}</td>'
             f'<td class="num">{len(sessions)}</td>'
             f'<td class="num">{total}</td>'
-            f'<td class="sids">{sids_html}</td>'
+            f'<td class="sids"><div class="sids-wrap">{sids_html}</div></td>'
             f'</tr>'
         )
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>命令反向索引</title>
@@ -1316,6 +2211,7 @@ def render_commands_html(rows):
 <a href="files.html">文件反向</a>
 <a href="commands.html" class="active">命令反向</a>
 <a href="workflows.html">工作流</a>
+<a href="knowledge-graph.html">知识图谱</a>
 </nav>
 <table class="files" id="files-table">
 <thead><tr><th>命令</th><th style="text-align:right">session 数</th><th style="text-align:right">总次数</th><th>session 列表(按时间)</th></tr></thead>
@@ -1369,10 +2265,10 @@ def render_files_html(rows):
         )
         body.append(
             f'<tr>'
-            f'<td class="fpath">{esc(path)}</td>'
+            f'<td class="fpath" title="{esc(path)}">{esc(path)}</td>'
             f'<td class="num">{len(sessions)}</td>'
             f'<td class="num">{total_touches}</td>'
-            f'<td class="sids">{sids_html}</td>'
+            f'<td class="sids"><div class="sids-wrap">{sids_html}</div></td>'
             f'</tr>'
         )
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>文件反向索引</title>
@@ -1387,6 +2283,7 @@ def render_files_html(rows):
 <a href="files.html" class="active">文件反向</a>
 <a href="commands.html">命令反向</a>
 <a href="workflows.html">工作流</a>
+<a href="knowledge-graph.html">知识图谱</a>
 </nav>
 <table class="files" id="files-table">
 <thead><tr><th>文件路径</th><th style="text-align:right">session 数</th><th style="text-align:right">总操作</th><th>session 列表(按时间)</th></tr></thead>
@@ -1617,6 +2514,9 @@ def main():
         wf_out = render_workflows_html(rows, wf_summaries)
         with open(os.path.join(out_dir, "workflows.html"), "w", encoding="utf-8") as f:
             f.write(wf_out)
+        kg_out = render_knowledge_graph_html(rows, wf_summaries)
+        with open(os.path.join(out_dir, "knowledge-graph.html"), "w", encoding="utf-8") as f:
+            f.write(kg_out)
         tok = (latest.get("tokens") or {}).get("total", 0)
         print(f"latest: {latest['sid'][:8]} · {latest['count']} msgs · {fmt_tokens(tok)} tok · {fmt_duration(latest.get('duration_min',0))} · proj={latest['project']}")
     elif len(args) == 2 and args[0] == "--all":
@@ -1657,6 +2557,9 @@ def main():
         wf_out = render_workflows_html(rows, wf_summaries)
         with open(os.path.join(out_dir, "workflows.html"), "w", encoding="utf-8") as f:
             f.write(wf_out)
+        kg_out = render_knowledge_graph_html(rows, wf_summaries)
+        with open(os.path.join(out_dir, "knowledge-graph.html"), "w", encoding="utf-8") as f:
+            f.write(kg_out)
         print(f"rendered {len(rows)} sessions + search/files/commands indexes; index at {out_dir}/index.html")
     elif len(args) == 2:
         src, dst = args

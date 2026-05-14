@@ -14,6 +14,8 @@ src = open(src_path, encoding="utf-8").read()
 
 tpl = """<!doctype html><html><head><meta charset="utf-8"><title>__TITLE__</title>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/turndown@7.1.3/dist/turndown.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@joplin/turndown-plugin-gfm@1.0.59/dist/turndown-plugin-gfm.min.js"></script>
 <style>
 :root{color-scheme:light dark; --bg:#fafaf8; --fg:#1d1d1f; --muted:#6e6e73; --accent:#36c; --border:#0001; --code-bg:#f3f3f0; --pre-bg:#f6f6f3; --table-stripe:#fafafa; --table-hover:#f0f4ff; --bq-bg:#f0f4ff}
 @media(prefers-color-scheme:dark){:root{--bg:#1a1a1a; --fg:#ececec; --muted:#9a9a9a; --accent:#69b1ff; --border:#fff2; --code-bg:#252525; --pre-bg:#1f1f1f; --table-stripe:#222; --table-hover:#1a2540; --bq-bg:#1a2540}}
@@ -142,6 +144,19 @@ img{max-width:100%;border-radius:8px;margin:1em 0}
 .ann-dialog button{padding:7px 14px;font-size:13px;border-radius:6px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--fg)}
 .ann-dialog button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 .ann-dialog button:hover{filter:brightness(0.95)}
+
+/* 编辑模式 */
+#root[contenteditable=true]{outline:2px dashed var(--accent);outline-offset:8px;border-radius:8px;padding:8px;background:color-mix(in srgb, var(--accent) 3%, transparent);min-height:200px}
+#root[contenteditable=true]:focus{outline-color:#3a7;outline-style:solid}
+.edit-mode-banner{position:fixed;top:0;left:0;right:0;background:#3a7;color:#fff;padding:6px 14px;font-size:12px;text-align:center;z-index:1100;display:none;font-weight:500}
+.edit-mode-banner.show{display:block}
+.edit-mode-banner button{background:rgba(255,255,255,0.2);color:#fff;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;margin-left:10px}
+.edit-fab{position:fixed;right:20px;bottom:70px;background:#3a7;color:#fff;border:none;border-radius:24px;padding:10px 16px;font-size:13px;font-weight:500;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,0.2);z-index:99;display:flex;align-items:center;gap:6px}
+.edit-fab:hover{filter:brightness(1.1)}
+.edit-fab.active{background:#c44}
+.export-md-btn{position:fixed;right:160px;bottom:20px;background:transparent;color:var(--accent);border:1px solid var(--accent);border-radius:24px;padding:10px 16px;font-size:13px;font-weight:500;cursor:pointer;z-index:99;display:none}
+.export-md-btn.show{display:block}
+.export-md-btn:hover{background:var(--accent);color:#fff}
 </style></head><body>
 <div class="layout">
 <aside class="toc"><div class="toc-title">目录</div><ul id="toc-list"></ul></aside>
@@ -169,6 +184,13 @@ img{max-width:100%;border-radius:8px;margin:1em 0}
 </div>
 
 <button class="ann-fab" id="ann-fab">📝 批注 <span class="ann-fab-count" id="ann-fab-count">0</span></button>
+<button class="edit-fab" id="edit-fab" title="切换编辑模式 · 像 Word 一样改文档">✏ 编辑</button>
+<button class="export-md-btn" id="export-md-btn" title="导出当前修改回 .md 文件">💾 导出 MD</button>
+
+<div class="edit-mode-banner" id="edit-mode-banner">
+✏ 编辑模式 · 点文本直接改 · 改完点右下角「导出 MD」下载新文件
+<button id="exit-edit-mode">退出编辑</button>
+</div>
 
 <div class="ann-dialog-overlay" id="ann-dialog-overlay"></div>
 <div class="ann-dialog" id="ann-dialog">
@@ -338,22 +360,26 @@ document.getElementById('ann-dialog-confirm').addEventListener('click', () => {
     const a = annotations.find(x => x.id === dlgEditId);
     if (a) { a.comment = comment; a.timestamp = new Date().toISOString(); }
   } else {
-    // 存上下文锚定:前/后 30 字 + 在原文里是第几次匹配
+    // 存上下文锚定 — 用 TreeWalker 视角数 nth(B5,跟 highlightText 对齐)
+    // 在 lastRange.startContainer 之前的 textNodes 里数 dlgText 出现次数
+    let nth = 0;
+    if (lastRange && lastRange.startContainer) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      let n;
+      while ((n = walker.nextNode())) {
+        if (n === lastRange.startContainer) {
+          // 同节点内,数到 startOffset 之前的出现
+          const before = n.nodeValue.slice(0, lastRange.startOffset);
+          let pos = 0;
+          while ((pos = before.indexOf(dlgText, pos)) !== -1) { nth++; pos += dlgText.length; }
+          break;
+        }
+        let pos = 0;
+        while ((pos = n.nodeValue.indexOf(dlgText, pos)) !== -1) { nth++; pos += dlgText.length; }
+      }
+    }
     const fullText = root.textContent;
     const firstIdx = fullText.indexOf(dlgText);
-    let nth = 0;
-    if (lastRange) {
-      // 算选段在原文里的实际位置(粗略)
-      const range = lastRange;
-      const beforeRange = document.createRange();
-      beforeRange.setStart(root, 0);
-      beforeRange.setEnd(range.startContainer, range.startOffset);
-      const beforeText = beforeRange.toString();
-      // 数 beforeText 里 dlgText 出现了几次
-      let pos = 0; let count = 0;
-      while ((pos = beforeText.indexOf(dlgText, pos)) !== -1) { count++; pos += dlgText.length; }
-      nth = count;
-    }
     const startIdx = (() => {
       let pos = 0; let i = 0;
       while ((pos = fullText.indexOf(dlgText, pos)) !== -1) {
@@ -390,10 +416,21 @@ function highlightAllAnnotations() {
     m.replaceWith(txt);
   });
   root.normalize();
-  // 按 selected_text 在原文里找,加 mark
+  // 按 selected_text 在原文里找,加 mark;找不到打 _orphan flag(原文被改过)
+  let orphanCount = 0;
   annotations.forEach(a => {
-    highlightText(a.selected_text, a.type, a.id, a.anchor);
+    const ok = highlightText(a.selected_text, a.type, a.id, a.anchor);
+    a._orphan = !ok;
+    if (!ok) orphanCount++;
   });
+  // 更新 fab count 显示 (含 orphan 提示)
+  const fcEl = document.getElementById('ann-fab-count');
+  if (fcEl && orphanCount > 0) {
+    fcEl.textContent = annotations.length + ' (' + orphanCount + ' 失定位)';
+    fcEl.style.background = 'rgba(255,200,0,0.4)';
+  } else if (fcEl) {
+    fcEl.style.background = '';
+  }
 }
 
 function highlightText(text, type, id, anchorContext) {
@@ -477,11 +514,13 @@ function renderAnnotationList() {
       const div = document.createElement('div');
       div.className = 'ann-list-item';
       div.dataset.type = a.type;
+      const orphanHint = a._orphan ? '<div style="font-size:10px;color:#c80;margin-top:3px">⚠ 原文已改,无法定位高亮(批注内容仍保留)</div>' : '';
       div.innerHTML = `
         <div class="ann-list-text">"${escapeHTML(a.selected_text.slice(0,80))}${a.selected_text.length>80?'…':''}"</div>
         ${a.comment ? '<div class="ann-list-comment">'+escapeHTML(a.comment)+'</div>' : ''}
+        ${orphanHint}
         <div class="ann-list-actions">
-          <button data-action="goto">定位</button>
+          <button data-action="goto" ${a._orphan ? 'disabled' : ''}>定位</button>
           <button data-action="edit">编辑</button>
           <button data-action="delete">删除</button>
         </div>
@@ -569,6 +608,174 @@ document.getElementById('ann-clear').addEventListener('click', () => {
 renderAnnotationList();
 highlightAllAnnotations();
 updateCounts();
+
+// ========== 编辑模式 ==========
+const editFab = document.getElementById('edit-fab');
+const editBanner = document.getElementById('edit-mode-banner');
+const exitEditBtn = document.getElementById('exit-edit-mode');
+const exportMdBtn = document.getElementById('export-md-btn');
+// C4: key 含路径 hash 避免重名文件草稿冲突
+function _hashStr(s) { let h=5381; for (let i=0;i<s.length;i++) h=((h<<5)+h+s.charCodeAt(i))|0; return Math.abs(h).toString(36); }
+const FILE_KEY_HASHED = FILE_KEY + ':' + _hashStr(location.pathname + FILE_KEY);
+const EDIT_STORAGE_KEY = 'edit-draft:' + FILE_KEY_HASHED;
+
+// 自动保存草稿到 localStorage(防丢失)
+let editAutoSaveTimer;
+let draftSaveWarned = false;
+let lastSelfSaveTime = 0;  // 本 tab 自己最近写入的 ts
+let crossTabConflictWarned = false;
+// B7 fix R5: 区分"本 tab 自己写" vs "其他 tab 写",storage event 只在 cross-tab 时触发
+window.addEventListener('storage', (e) => {
+  if (e.key === EDIT_STORAGE_KEY + ':time' && e.newValue) {
+    // 检测到另一 tab 在改同文档(storage event 本 tab 不会触发自己)
+    if (!crossTabConflictWarned && root.getAttribute('contenteditable') === 'true') {
+      crossTabConflictWarned = true;
+      console.warn('另一 tab 正在编辑同一文档,本 tab 的改动可能跟它们冲突');
+    }
+  }
+});
+function autoSaveDraft() {
+  try {
+    const otherTime = localStorage.getItem(EDIT_STORAGE_KEY + ':time');
+    if (otherTime) {
+      const otherTs = new Date(otherTime).getTime();
+      // 关键:跟"本 tab 自己最近写入"比。若 storage 里 ts 比自己最新写入新 → 另一 tab 写过 → 跳过
+      // (用 > 严格小于,避免把自己锁死;另一 tab 写的 ts 必然 > 自己 lastSelfSaveTime)
+      if (otherTs > lastSelfSaveTime && (Date.now() - otherTs) < 1000) {
+        return;
+      }
+    }
+  } catch (e) {}
+  try {
+    localStorage.setItem(EDIT_STORAGE_KEY, root.innerHTML);
+    const now = new Date().toISOString();
+    localStorage.setItem(EDIT_STORAGE_KEY + ':time', now);
+    lastSelfSaveTime = new Date(now).getTime();  // 只更新本 tab 自己的 ts
+  } catch (e) {
+    console.warn('editor draft save failed:', e);
+    // A5: localStorage 满了清旧 draft 重试一次
+    if (e.name === 'QuotaExceededError' || /quota/i.test(e.message || '')) {
+      // 清掉所有其他 edit-draft 旧条目
+      const oldKeys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('edit-draft:') && !k.startsWith(EDIT_STORAGE_KEY)) oldKeys.push(k);
+      }
+      oldKeys.forEach(k => localStorage.removeItem(k));
+      try {
+        localStorage.setItem(EDIT_STORAGE_KEY, root.innerHTML);
+        localStorage.setItem(EDIT_STORAGE_KEY + ':time', new Date().toISOString());
+      } catch (e2) {
+        if (!draftSaveWarned) {
+          alert('编辑草稿无法保存(localStorage 已满)。建议立刻点「💾 导出 MD」下载,避免改动丢失。');
+          draftSaveWarned = true;
+        }
+      }
+    }
+  }
+}
+
+function enterEditMode() {
+  // 编辑前先清除 highlight(避免 turndown 把 <span class="ann-mark"> 转回去时混乱)
+  root.querySelectorAll('.ann-mark').forEach(m => {
+    const txt = document.createTextNode(m.textContent);
+    m.replaceWith(txt);
+  });
+  root.normalize();
+  // 收起批注 toolbar
+  toolbar.classList.remove('show');
+  // 启用编辑
+  root.setAttribute('contenteditable', 'true');
+  root.focus();
+  editBanner.classList.add('show');
+  exportMdBtn.classList.add('show');
+  editFab.classList.add('active');
+  editFab.innerHTML = '✕ 关闭编辑';
+  // 监听改动自动存草稿(500ms 节流)
+  root.addEventListener('input', scheduleAutoSave);
+}
+
+function exitEditMode() {
+  root.removeAttribute('contenteditable');
+  editBanner.classList.remove('show');
+  exportMdBtn.classList.remove('show');
+  editFab.classList.remove('active');
+  editFab.innerHTML = '✏ 编辑';
+  root.removeEventListener('input', scheduleAutoSave);
+  // 重新应用批注高亮(原文可能变了,部分会失败,但仍试)
+  highlightAllAnnotations();
+}
+
+function scheduleAutoSave() {
+  clearTimeout(editAutoSaveTimer);
+  editAutoSaveTimer = setTimeout(autoSaveDraft, 500);
+}
+
+if (editFab) {
+  editFab.addEventListener('click', () => {
+    if (root.getAttribute('contenteditable') === 'true') {
+      exitEditMode();
+    } else {
+      enterEditMode();
+    }
+  });
+}
+if (exitEditBtn) exitEditBtn.addEventListener('click', exitEditMode);
+
+// 导出 MD
+if (exportMdBtn) {
+  exportMdBtn.addEventListener('click', () => {
+    if (typeof TurndownService === 'undefined') {
+      alert('turndown.js 未加载,无法导出。检查网络。');
+      return;
+    }
+    const td = new TurndownService({
+      headingStyle: 'atx',          // # 标题 (而不是 ===)
+      codeBlockStyle: 'fenced',     // ``` 代码块 (而不是缩进)
+      bulletListMarker: '-',
+      emDelimiter: '*',
+      strongDelimiter: '**',
+      linkStyle: 'inlined',
+    });
+    // C5: 用 GFM 插件生成 markdown 表格(| col | col |),Claude 读着自然
+    if (typeof turndownPluginGfm !== 'undefined') {
+      td.use(turndownPluginGfm.gfm);
+    } else {
+      td.keep(['table', 'thead', 'tbody', 'tr', 'th', 'td']);  // fallback
+    }
+    // 注:之前有个 mermaid rule 是 dead code(永远不触发),且会吞内容,已删除
+    const md = td.turndown(root.innerHTML);
+    const filename = FILE_KEY.replace(/\\.md$/, '') + '.edited.md';
+    const blob = new Blob([md], {type: 'text/markdown'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    setTimeout(() => alert('已下载: ' + filename + '\\n\\n你可以把这个文件覆盖原 .md,或者发给 Claude 让它 diff 改动。'), 100);
+  });
+}
+
+// 启动时检查是否有未保存的草稿
+const draftHtml = localStorage.getItem(EDIT_STORAGE_KEY);
+const draftTime = localStorage.getItem(EDIT_STORAGE_KEY + ':time');
+if (draftHtml && draftTime) {
+  const ageMin = (Date.now() - new Date(draftTime).getTime()) / 60000;
+  if (ageMin < 60 * 24) {  // 24h 内的草稿才提示恢复
+    setTimeout(() => {
+      if (confirm('检测到 ' + Math.round(ageMin) + ' 分钟前的未保存编辑草稿,要恢复吗?\\n(选取消则丢弃草稿用最新原文)')) {
+        root.innerHTML = draftHtml;
+        highlightAllAnnotations();
+        // B6: 恢复后自动进入编辑模式,避免"看到改动但不能改"的困惑
+        setTimeout(() => enterEditMode(), 100);
+      } else {
+        localStorage.removeItem(EDIT_STORAGE_KEY);
+        localStorage.removeItem(EDIT_STORAGE_KEY + ':time');
+      }
+    }, 200);
+  }
+}
 </script>
 </body></html>"""
 

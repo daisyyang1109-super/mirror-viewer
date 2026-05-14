@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.0] - 2026-05-14 · 数据修复 + 知识图谱导出 + 周报
+
+### 新增
+- **Skill: weekly-report** (`skills/weekly-report/`)
+  - 读最近 N 天 session 摘要 + tags + 文件 + 命令 + token,DeepSeek 一次汇总
+  - 7 节结构(主题 / 决策 / 项目 / 产出 / token 统计 / 工作模式 / 下周建议)
+  - Python 端先算 ground truth,LLM 只填表不重新加 24 个数
+  - 单 session 异常自动标 `⚠ 数据可疑`
+- **知识图谱导出**(knowledge-graph.html)
+  - 一键导出 Markdown 大纲(纯 tag 树,community → tag,session 不进图)
+  - 一键导出思维导图 PNG(D3 horizontal tree + retina 2x,自动 clamp 16384 上限防爆)
+
+### 修复(P0)
+- **token total 公式去掉 cache_read** — 之前包含缓存命中字节数,单 session 数字虚高 50-130x
+  - 例:某 session 5.5B → 真实 106M
+- **duration 加 idle gap 过滤** — 同一 sessionId 跨多天 resume 时不再用 last-first wall clock,改成相邻 ts gap > 5min 跳过累加
+  - 例:某 session 311h(13 天日历跨度)→ 75h(真实活跃时长)
+- **fmt_tokens 加 B 后缀** — 10B+ 不再显示成 10020.8M
+- **超长 badge 阈值重定标** — 从 100K 改为 500 条消息或 5M 真实 token
+
+### 改进
+- files / commands 反向索引表格用 `table-layout: fixed`,fpath 列 ellipsis + hover 展开,sids 列改 chip 样式 flex wrap
+- 过滤 heredoc 续行 noise(`\\` 单字符等不再进命令索引)
+- workflows.html tab nav 补全(知识图谱 link)
+
 ## [0.1.0] - 2026-05-14 · Initial release
 
 ### 主要功能
