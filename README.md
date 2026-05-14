@@ -1,5 +1,7 @@
 # mirror-viewer
 
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue) ![License](https://img.shields.io/badge/License-MIT-green) ![Status](https://img.shields.io/badge/Status-Alpha-orange) ![Zero Token](https://img.shields.io/badge/Core-Zero%20Token-success)
+
 > Claude Code session 的可视化 + 元数据管理 + 智能后处理工具。实时镜像 CLI 对话到 HTML(不替代 CLI),提供跨 session 全局搜索 / 项目分组 / 工作流 pattern 识别 / 短/详细摘要 / Markdown 批注等能力。
 
 **关键特征**:
@@ -14,7 +16,11 @@
 
 ## 截图
 
-(占位,补 screenshots/index.png + session.png + workflows.png)
+| Session 列表(index) | 单 Session 视图 |
+|:---:|:---:|
+| ![](screenshots/index.png) | ![](screenshots/session.png) |
+| **工作流 Pattern 识别** | **Markdown 批注** |
+| ![](screenshots/workflows.png) | ![](screenshots/md-annotate.png) |
 
 ---
 
