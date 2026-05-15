@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.2] - 2026-05-15 · 一键安装脚本 + README 路径修复
+
+### 新增
+- **`install.sh` 一键安装** — `bash install.sh` 自动把 viewer + skills cp 到 `~/.claude/` 标准位置,避免用户手动拷文件踩路径坑
+
+### 改进
+- **README 把 skill 安装从"可选"提升到"强烈推荐"** — 实测早期用户(@chuyun)直接跳过 skill 安装就跑 `python3 ~/.claude/skills/...`,文件不存在报错。skill 不是可选,是 80% 智能层的核心
+- **README hook 路径修复** — 原 hook 写的 `~/mirror-viewer/jsonl2html.py`,但 install.sh 装到 `~/.claude/mirror/`,改成后者保持一致
+- **手动安装步骤明确** — clone 后必须 cp viewer + skills 到 `~/.claude/`,README 单独列出
+
 ## [0.2.1] - 2026-05-15 · 用户上报修复
 
 ### 修复

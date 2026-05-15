@@ -40,21 +40,44 @@ mirror viewer 把这些一次性解决。
 
 ## 快速开始
 
-### 1. 安装(2 分钟)
+### 0. 一键安装(推荐,1 分钟)
+
+```bash
+git clone https://github.com/daisyyang1109-super/mirror-viewer.git ~/mirror-viewer
+cd ~/mirror-viewer
+bash install.sh
+```
+
+`install.sh` 自动:
+- 把 `jsonl2html.py` / `md2html.py` cp 到 `~/.claude/mirror/`
+- 把 `skills/summarize-sessions` / `skills/weekly-report` cp 到 `~/.claude/skills/`
+- 打印你接下来要做的步骤(配 key / 跑首次渲染 / 加 hooks)
+
+然后跑一次全量渲染:
+
+```bash
+python3 ~/.claude/mirror/jsonl2html.py --all ~/.claude/mirror
+open ~/.claude/mirror/index.html
+```
+
+第一次跑会渲染所有历史 session,看到一个**多 session 列表**。
+
+### 1. 手动安装(如果你不想 bash 脚本)
 
 ```bash
 # clone
 git clone https://github.com/daisyyang1109-super/mirror-viewer.git ~/mirror-viewer
 
-# 跑一次全量渲染(扫所有 ~/.claude/projects/*/*.jsonl)
-mkdir -p ~/.claude/mirror
-python3 ~/mirror-viewer/jsonl2html.py --all ~/.claude/mirror
+# cp viewer + skills 到标准位置
+mkdir -p ~/.claude/mirror ~/.claude/skills
+cp ~/mirror-viewer/jsonl2html.py ~/mirror-viewer/md2html.py ~/.claude/mirror/
+cp -r ~/mirror-viewer/skills/summarize-sessions ~/.claude/skills/
+cp -r ~/mirror-viewer/skills/weekly-report ~/.claude/skills/
 
-# 打开看
+# 跑一次全量渲染
+python3 ~/.claude/mirror/jsonl2html.py --all ~/.claude/mirror
 open ~/.claude/mirror/index.html
 ```
-
-第一次跑会渲染所有历史 session,看到一个**多 session 列表**。
 
 ### 2. 实时镜像(加 Stop hook)
 
@@ -68,7 +91,7 @@ open ~/.claude/mirror/index.html
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/mirror-viewer/jsonl2html.py --latest ~/.claude/mirror 2>/dev/null || true",
+            "command": "python3 ~/.claude/mirror/jsonl2html.py --latest ~/.claude/mirror 2>/dev/null || true",
             "async": true
           }
         ]
@@ -90,26 +113,26 @@ open ~/.claude/mirror/index.html
 
 之后每次 Claude Code 回复完,mirror viewer 自动渲染最新 session HTML。浏览器右下角点 **↻ 刷新** 看更新。
 
-### 3. (可选)智能摘要 skill
+### 3. 配 DeepSeek API key + 跑 skills(强烈推荐)
 
-如果想给每个 session 加一句话摘要 + 5 个标签 + 详细 outline:
+skill 是 mirror-viewer 智能层(摘要 / 标签 / 周报),走 DeepSeek(~¥0.02/session)。
+**如果你跑了 install.sh,skill 已经在 `~/.claude/skills/` 了,直接用**:
 
 ```bash
-# cp skill 到 ~/.claude/skills/
-mkdir -p ~/.claude/skills/summarize-sessions
-cp -r ~/mirror-viewer/skills/summarize-sessions/* ~/.claude/skills/summarize-sessions/
-
-# 配置 DeepSeek API key(任一方式)
+# 配 DeepSeek API key(任一方式)
 export DEEPSEEK_API_KEY=sk-xxx
 # 或者
 echo 'sk-xxx' > ~/.deepseek
 
-# 跑短摘要(增量,只处理还没摘要的)
+# 跑短摘要 + tag(增量,只处理还没摘要的)
 python3 ~/.claude/skills/summarize-sessions/summarize.py
 # 或在 Claude Code 里输 /summarize-sessions
 
 # 跑某 session 的详细 outline(多段主题 + 跳转锚点)
 python3 ~/.claude/skills/summarize-sessions/detail-summary.py --sid <full-sid>
+
+# 跑过去 7 天周报(自动汇总主题 / 决策 / 项目 / token)
+python3 ~/.claude/skills/weekly-report/report.py
 ```
 
 成本:DeepSeek 单 session 约 ¥0.02-0.05。
