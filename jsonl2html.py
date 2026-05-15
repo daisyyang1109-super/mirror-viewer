@@ -560,6 +560,16 @@ table.sessions td.tags{font-size:11px;max-width:240px}
 .tag-clickable{cursor:pointer;user-select:none}
 .tag-clickable:hover{background:#cdd9f0;color:#36c}
 @media(prefers-color-scheme:dark){.tag-clickable:hover{background:#234070;color:#9bf}}
+/* 复制 CLI resume 命令的按钮 */
+.resume-btn{display:inline-block;padding:1px 8px;margin-left:5px;border:1px solid rgba(0,0,0,0.08);background:rgba(0,0,0,0.025);cursor:pointer;font-size:11px;color:#666;border-radius:4px;line-height:1.45;vertical-align:1px;font-family:ui-monospace,monospace;letter-spacing:0.3px;transition:background 0.12s ease,color 0.12s ease,border-color 0.12s ease}
+.resume-btn:hover{background:rgba(54,98,204,0.08);color:#36c;border-color:#36c}
+@media(prefers-color-scheme:dark){
+  .resume-btn{border-color:rgba(255,255,255,0.10);background:rgba(255,255,255,0.04);color:#aaa}
+  .resume-btn:hover{background:rgba(122,168,232,0.18);color:#9bf;border-color:#9bf}
+}
+.copy-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:rgba(20,20,20,0.96);color:#fff;padding:11px 20px;border-radius:8px;z-index:9999;font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,0.30);max-width:80vw;word-break:break-all;display:none;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',sans-serif;backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,0.08)}
+.copy-toast.show{display:block;animation:toastFade 3s ease}
+@keyframes toastFade{0%{opacity:0;transform:translate(-50%,12px)}10%{opacity:1;transform:translate(-50%,0)}85%{opacity:1}100%{opacity:0;transform:translate(-50%,-8px)}}
 """
 
 INDEX_JS = """
@@ -569,6 +579,35 @@ const resultsWrap = document.getElementById('results-wrap');
 const resultsEl = document.getElementById('results');
 const resultsMeta = document.getElementById('results-meta');
 const tableEl = document.getElementById('session-table');
+
+// 复制"resume 这个 session"命令到剪贴板
+function showToast(msg) {
+  let t = document.querySelector('.copy-toast');
+  if (!t) { t = document.createElement('div'); t.className = 'copy-toast'; document.body.appendChild(t); }
+  t.textContent = msg;
+  t.classList.remove('show');
+  void t.offsetWidth;  // 重启 animation
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+document.body.addEventListener('click', (e) => {
+  const btn = e.target.closest('.resume-btn');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const sid = btn.dataset.sid;
+  const cwd = btn.dataset.cwd;
+  const cmd = cwd ? `cd "${cwd}" && claude --resume ${sid}` : `claude --resume ${sid}`;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(() => {
+      showToast('✓ 已复制,粘贴终端 resume: ' + cmd.slice(0, 80) + (cmd.length > 80 ? '…' : ''));
+    }).catch(() => {
+      window.prompt('手动复制下面这行到终端:', cmd);
+    });
+  } else {
+    window.prompt('手动复制下面这行到终端:', cmd);
+  }
+});
 
 function esc(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -1168,7 +1207,9 @@ def render_index_html(rows, latest_sid, search_index, summaries=None, closed_sid
             f'<td class="num">{fmt_duration(r.get("duration_min",0))}</td>'
             f'<td class="num">{r.get("files_n",0)}</td>'
             f'<td class="num">{r.get("commands_n",0)}</td>'
-            f'<td><a href="{esc(r["sid"])}.html">{esc(r["sid"][:8])}</a> {status_html}</td>'
+            f'<td><a href="{esc(r["sid"])}.html">{esc(r["sid"][:8])}</a> '
+            f'<button class="resume-btn" data-sid="{esc(r["sid"])}" data-cwd="{esc(r.get("cwd","") or "")}" title="复制 CLI 命令,粘贴终端即 resume 这个 session">resume ↗</button> '
+            f'{status_html}</td>'
             f'<td class="{sum_cls}">{esc(sum_text)}</td>'
             f'<td class="tags">{tag_html or "—"}</td>'
             f'</tr>'
@@ -1188,6 +1229,7 @@ def render_index_html(rows, latest_sid, search_index, summaries=None, closed_sid
 <a href="commands.html">命令反向</a>
 <a href="workflows.html">工作流</a>
 <a href="knowledge-graph.html">知识图谱</a>
+<a href="reports.html">周报</a>
 </nav>
 <div id="chips-wrap" class="chips">{chips_html}</div>
 {tag_chips_html}
@@ -1361,6 +1403,7 @@ body{padding:0;max-width:none;margin:0}
 <a href="commands.html">命令反向</a>
 <a href="workflows.html">工作流</a>
 <a href="knowledge-graph.html" class="active">知识图谱</a>
+<a href="reports.html">周报</a>
 </nav>
 <div class="kg-layout">
 <aside class="kg-sidebar">
@@ -2162,6 +2205,7 @@ def render_workflows_html(rows, summaries):
 <a href="commands.html">命令反向</a>
 <a href="workflows.html" class="active">工作流</a>
 <a href="knowledge-graph.html">知识图谱</a>
+<a href="reports.html">周报</a>
 </nav>
 {summary_html}
 {chr(10).join(pattern_sections)}
@@ -2212,6 +2256,7 @@ def render_commands_html(rows):
 <a href="commands.html" class="active">命令反向</a>
 <a href="workflows.html">工作流</a>
 <a href="knowledge-graph.html">知识图谱</a>
+<a href="reports.html">周报</a>
 </nav>
 <table class="files" id="files-table">
 <thead><tr><th>命令</th><th style="text-align:right">session 数</th><th style="text-align:right">总次数</th><th>session 列表(按时间)</th></tr></thead>
@@ -2284,6 +2329,7 @@ def render_files_html(rows):
 <a href="commands.html">命令反向</a>
 <a href="workflows.html">工作流</a>
 <a href="knowledge-graph.html">知识图谱</a>
+<a href="reports.html">周报</a>
 </nav>
 <table class="files" id="files-table">
 <thead><tr><th>文件路径</th><th style="text-align:right">session 数</th><th style="text-align:right">总操作</th><th>session 列表(按时间)</th></tr></thead>
@@ -2307,6 +2353,112 @@ const q0 = readHash();
 if (q0) {{ fi.value = q0; applyFilter(q0); }}
 fi.addEventListener('input', () => {{ applyFilter(fi.value); writeHash(fi.value); }});
 </script>
+</body></html>"""
+
+
+def render_reports_html(out_dir):
+    """扫 out_dir/reports/*.html 列周报清单。每篇含 mtime / 覆盖天数 / 文件大小 / 一键打开。"""
+    reports_dir = os.path.join(out_dir, "reports")
+    items = []
+    if os.path.isdir(reports_dir):
+        for fname in sorted(os.listdir(reports_dir), reverse=True):
+            if not fname.endswith(".html"):
+                continue
+            fpath = os.path.join(reports_dir, fname)
+            stat = os.stat(fpath)
+            mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+            size_kb = stat.st_size // 1024
+            # 文件名解析:2026-05-14-7d-report.html → 日期 + 覆盖天数
+            base = fname.replace(".html", "")
+            parts = base.split("-")
+            date_str = "-".join(parts[:3]) if len(parts) >= 4 else "—"
+            days_str = parts[3] if len(parts) >= 5 else parts[3] if len(parts) == 4 else "—"
+            md_name = fname.replace(".html", ".md")
+            md_exists = os.path.exists(os.path.join(reports_dir, md_name))
+            items.append({
+                "fname": fname,
+                "md_name": md_name,
+                "md_exists": md_exists,
+                "date": date_str,
+                "days": days_str,
+                "mtime": mtime,
+                "size_kb": size_kb,
+            })
+
+    if not items:
+        body_html = '''<div class="report-empty">
+<p>还没有周报。跑下面命令生成一份(覆盖最近 7 天):</p>
+<pre><code>python3 ~/.claude/skills/weekly-report/report.py --days 7</code></pre>
+<p>跑完刷新这页就能看到。</p>
+</div>'''
+    else:
+        rows = []
+        for it in items:
+            md_link = (f'<a href="reports/{esc(it["md_name"])}" download class="report-md">.md</a>'
+                       if it["md_exists"] else '')
+            rows.append(
+                f'<tr>'
+                f'<td class="report-date">{esc(it["date"])}</td>'
+                f'<td class="report-days">{esc(it["days"])}</td>'
+                f'<td class="report-mtime">{esc(it["mtime"])}</td>'
+                f'<td class="report-size">{it["size_kb"]} KB</td>'
+                f'<td class="report-actions">'
+                f'<a href="reports/{esc(it["fname"])}" class="report-open" target="_blank">打开</a>'
+                f'{md_link}'
+                f'</td>'
+                f'</tr>'
+            )
+        body_html = f'''<table class="files" id="reports-table">
+<thead><tr><th>日期</th><th>覆盖</th><th>生成时间</th><th>大小</th><th style="width:160px">操作</th></tr></thead>
+<tbody>
+{chr(10).join(rows)}
+</tbody>
+</table>'''
+
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>周报</title>
+<style>{CSS}
+/* reports 页专属 */
+.report-date{{font-family:ui-monospace,monospace;font-size:13px;font-weight:600;width:110px}}
+.report-days{{font-family:ui-monospace,monospace;color:#36c;font-size:12px;width:60px}}
+.report-mtime,.report-size{{color:#888;font-size:11.5px;font-family:ui-monospace,monospace}}
+.report-mtime{{width:140px}}
+.report-size{{width:70px}}
+.report-actions{{font-size:11px}}
+.report-actions a{{display:inline-block;padding:3px 9px;margin-right:4px;border-radius:4px;text-decoration:none;font-family:ui-monospace,monospace;letter-spacing:0.3px;transition:background 0.12s ease,color 0.12s ease,border-color 0.12s ease}}
+.report-open{{background:rgba(54,98,204,0.10);color:#36c;border:1px solid transparent}}
+.report-open:hover{{background:#36c;color:#fff}}
+.report-md{{background:transparent;color:#888;border:1px solid rgba(0,0,0,0.10)}}
+.report-md:hover{{color:#36c;border-color:#36c}}
+@media(prefers-color-scheme:dark){{
+  .report-open{{background:rgba(122,168,232,0.18);color:#9bf}}
+  .report-md{{border-color:rgba(255,255,255,0.10);color:#aaa}}
+}}
+.report-hint{{margin:14px 0 18px;padding:11px 15px;background:rgba(0,0,0,0.025);border-left:3px solid #36c;font-size:12.5px;color:#5a6470;border-radius:0 4px 4px 0;line-height:1.65}}
+@media(prefers-color-scheme:dark){{.report-hint{{background:rgba(255,255,255,0.03);color:#aaa}}}}
+.report-hint code{{padding:1px 6px;background:rgba(0,0,0,0.05);border-radius:3px;font-family:ui-monospace,monospace;font-size:12px}}
+@media(prefers-color-scheme:dark){{.report-hint code{{background:rgba(255,255,255,0.06)}}}}
+.report-empty{{padding:32px 24px;text-align:center;color:#888;background:rgba(0,0,0,0.02);border-radius:6px;margin-top:16px}}
+.report-empty pre{{display:inline-block;text-align:left;margin:12px 0 0;padding:10px 14px;background:rgba(0,0,0,0.05);border-radius:4px;font-size:12.5px}}
+@media(prefers-color-scheme:dark){{.report-empty{{background:rgba(255,255,255,0.03);color:#aaa}};.report-empty pre{{background:rgba(255,255,255,0.05)}}}}
+</style></head><body>
+<header class="top">
+<strong>周报</strong>
+<span class="meta-info">{len(items)} 份</span>
+</header>
+<nav class="tabs">
+<a href="index.html">Sessions</a>
+<a href="files.html">文件反向</a>
+<a href="commands.html">命令反向</a>
+<a href="workflows.html">工作流</a>
+<a href="knowledge-graph.html">知识图谱</a>
+<a href="reports.html" class="active">周报</a>
+</nav>
+<div class="report-hint">
+<strong>生成新周报</strong>:<code>python3 ~/.claude/skills/weekly-report/report.py --days 7</code>(默认 7 天)/ <code>--days 14</code> 等
+<br>
+或 Claude Code 里直接说 <strong>"看下这周做了啥"</strong>,skill 自动触发。跑完刷新这页(或点右下 ↻)看到新周报。
+</div>
+{body_html}
 </body></html>"""
 
 
@@ -2582,6 +2734,9 @@ def main():
         kg_out = render_knowledge_graph_html(rows, wf_summaries)
         with open(os.path.join(out_dir, "knowledge-graph.html"), "w", encoding="utf-8") as f:
             f.write(kg_out)
+        reports_out = render_reports_html(out_dir)
+        with open(os.path.join(out_dir, "reports.html"), "w", encoding="utf-8") as f:
+            f.write(reports_out)
         tok = (latest.get("tokens") or {}).get("total", 0)
         print(f"latest: {latest['sid'][:8]} · {latest['count']} msgs · {fmt_tokens(tok)} tok · {fmt_duration(latest.get('duration_min',0))} · proj={latest['project']}")
     elif len(args) == 2 and args[0] == "--all":
@@ -2625,6 +2780,9 @@ def main():
         kg_out = render_knowledge_graph_html(rows, wf_summaries)
         with open(os.path.join(out_dir, "knowledge-graph.html"), "w", encoding="utf-8") as f:
             f.write(kg_out)
+        reports_out = render_reports_html(out_dir)
+        with open(os.path.join(out_dir, "reports.html"), "w", encoding="utf-8") as f:
+            f.write(reports_out)
         print(f"rendered {len(rows)} sessions + search/files/commands indexes; index at {out_dir}/index.html")
     elif len(args) == 2:
         src, dst = args

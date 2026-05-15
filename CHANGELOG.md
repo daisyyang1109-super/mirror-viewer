@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.4] - 2026-05-15 · 周报 UI + Resume 按钮 + UI 统一
+
+### 新增
+- **`reports.html` 周报页**:扫 `~/.claude/mirror/reports/*.html` 自动列表,日期 / 覆盖天数 / 生成时间 / 大小 / 一键打开 + .md 下载。5 处 tab nav 加 "周报" 链接
+- **Resume 按钮**:主页 sessions 表格每行 sid 旁加 "resume ↗" 小 chip,点击复制 `cd "<cwd>" && claude --resume <sid>` 到剪贴板,底部弹毛玻璃 toast,粘贴终端立刻 resume 该 session
+- **空状态友好**:reports.html 没周报时显示 "跑 skill 命令" 提示,带可复制命令块
+
+### UI 优化(基于早期用户反馈)
+- 主页 resume chip 配色跟 sid 链接色调统一(`#36c` 微底 / hover 高亮)
+- Toast 改 `backdrop-filter:blur(18px)` + sans-serif + 圆角 8px,iOS 通知中心质感
+- Reports 表格列宽明确(110 / 60 / 140 / 70 / 160px),按钮 chip 化
+- 全 UI 移除 emoji(plain modern 风格)
+- 暗色模式全覆盖
+
+### 致谢
+- @chuyun 反馈"在 CLI 转到这个 session" → 直接落地成 resume 按钮
+
 ## [0.2.3] - 2026-05-15 · 内置 --install,无 bash 也能装
 
 ### 新增
