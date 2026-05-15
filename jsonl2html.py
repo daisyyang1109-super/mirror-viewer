@@ -2435,8 +2435,73 @@ def meta_from_index_entry(e):
     }
 
 
+def self_install(target_mirror, target_skills):
+    """把当前脚本 + md2html.py + skills cp 到标准位置。"""
+    src_dir = os.path.dirname(os.path.abspath(__file__))
+    print("==> mirror-viewer 自动安装")
+    print(f"    源:{src_dir}")
+    os.makedirs(target_mirror, exist_ok=True)
+    os.makedirs(target_skills, exist_ok=True)
+    import shutil
+    # viewer 主体
+    for fname in ("jsonl2html.py", "md2html.py"):
+        src = os.path.join(src_dir, fname)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(target_mirror, fname))
+            print(f"    ✓ {fname} → {target_mirror}/")
+    # skills
+    skills_src = os.path.join(src_dir, "skills")
+    if os.path.isdir(skills_src):
+        for sk in os.listdir(skills_src):
+            sk_src = os.path.join(skills_src, sk)
+            sk_dst = os.path.join(target_skills, sk)
+            if os.path.isdir(sk_src):
+                if os.path.exists(sk_dst):
+                    shutil.rmtree(sk_dst)
+                shutil.copytree(sk_src, sk_dst)
+                print(f"    ✓ skill {sk} → {target_skills}/")
+    print()
+    print("==> 安装完成")
+    print()
+    print("下一步:")
+    print("  # 配 DeepSeek API key(skill 用,可选)")
+    print("  echo 'sk-xxx' > ~/.deepseek")
+    print()
+    print("  # 跑首次渲染")
+    print(f"  python3 {target_mirror}/jsonl2html.py --all {target_mirror}")
+    print()
+    print(f"  # 打开主页")
+    print(f"  open {target_mirror}/index.html")
+
+
+def check_self_install():
+    """如果当前脚本不在 ~/.claude/mirror/,而且标准位置也没装,提示用户跑 --install。"""
+    script_path = os.path.abspath(__file__)
+    standard_mirror = os.path.expanduser("~/.claude/mirror")
+    standard_script = os.path.join(standard_mirror, "jsonl2html.py")
+    if script_path != standard_script and not os.path.exists(standard_script):
+        print("提示:mirror-viewer 还没装在标准位置 ~/.claude/mirror/")
+        print("跑下面一行自动装完所有(viewer + skills):")
+        print()
+        print(f"  python3 {script_path} --install")
+        print()
+
+
 def main():
     args = sys.argv[1:]
+    # 自检 + 一键安装
+    if len(args) >= 1 and args[0] == "--install":
+        mirror_dir = os.path.expanduser("~/.claude/mirror")
+        skills_dir = os.path.expanduser("~/.claude/skills")
+        self_install(mirror_dir, skills_dir)
+        return
+    if not args:
+        check_self_install()
+        print("用法:")
+        print("  python3 jsonl2html.py --install               # 一键装到 ~/.claude/")
+        print("  python3 jsonl2html.py --all <out_dir>         # 渲染所有 session")
+        print("  python3 jsonl2html.py --latest <out_dir>      # 只渲染最近 session(Stop hook 用)")
+        return
     if len(args) == 2 and args[0] == "--latest":
         out_dir = args[1]
         os.makedirs(out_dir, exist_ok=True)

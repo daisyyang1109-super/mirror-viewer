@@ -44,8 +44,13 @@ mirror viewer 把这些一次性解决。
 
 ```bash
 git clone https://github.com/daisyyang1109-super/mirror-viewer.git ~/mirror-viewer
-cd ~/mirror-viewer
-bash install.sh
+python3 ~/mirror-viewer/jsonl2html.py --install
+```
+
+或者用 bash 脚本(等价):
+
+```bash
+cd ~/mirror-viewer && bash install.sh
 ```
 
 `install.sh` 自动:

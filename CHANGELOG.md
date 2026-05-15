@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.3] - 2026-05-15 · 内置 --install,无 bash 也能装
+
+### 新增
+- **`python3 jsonl2html.py --install`** — 脚本自检 + 自装,把 viewer + skills cp 到 `~/.claude/` 标准位置。比 `install.sh` 更便携(不依赖 bash),Windows 也能用
+- **无参数运行自动 usage**:`python3 jsonl2html.py` 显示用法 + 自检 + 提示装到标准位置
+
+### 改进
+- README 的"一键安装"段落优先推荐 `python3 jsonl2html.py --install`(install.sh 作为备选保留)
+
 ## [0.2.2] - 2026-05-15 · 一键安装脚本 + README 路径修复
 
 ### 新增
