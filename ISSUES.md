@@ -130,3 +130,8 @@
 ---
 
 **总结**:本轮修了 5 个最致命的。剩 H1-H5 + M1-M10 + L1-L3 共 18 条,按优先级排进 TODO,按需修。
+
+## 0.2.1 - 2026-05-15 · 用户上报修复
+
+- **[H6] jsonl 文件编码容错** — 用户 chuyun 上报:某些 session 的 jsonl 含非 UTF-8 字节,`open(encoding="utf-8")` 直接 raise UnicodeDecodeError 导致渲染失败。修复:全部 jsonl 读取加 `errors="replace"`(`jsonl2html.py:190, 216, 334, 373`)。元数据 JSON 不动(那是我们自己生产的,fail-fast 更好)。
+- **[L4] Python 3.12+ SyntaxWarning** — JS 嵌入 Python 字符串里的 regex `\d` / `\.` 在新版 Python 触发 SyntaxWarning(老版本只是 silent)。修复:所有此类 escape 改成 `\\d` / `\\.`(`jsonl2html.py:849, 901`)。

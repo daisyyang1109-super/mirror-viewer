@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] - 2026-05-15 · 用户上报修复
+
+### 修复
+- **jsonl 编码容错**(用户 @chuyun 上报)— 某些 session 的 jsonl 含非 UTF-8 字节,渲染时 UnicodeDecodeError 中断。所有 jsonl 读取加 `errors="replace"`,坏字节用 replacement char 代替不再 crash。
+- **Python 3.12+ SyntaxWarning** — JS regex 嵌入 Python 字符串的 `\d` / `\.` 在新版 Python 触发警告。修复:统一 escape 成 `\\d` / `\\.`。
+
+### 致谢
+- @chuyun:第一个外部用户,主动 clone + 用 Claude 自助修了 bug + 给我 diff,indie 梦想中的开源协作
+
 ## [0.2.0] - 2026-05-14 · 数据修复 + 知识图谱导出 + 周报
 
 ### 新增

@@ -187,7 +187,7 @@ def render_msg(d, idx=0):
 def parse_jsonl(jsonl_path):
     cards = []
     idx = 0
-    with open(jsonl_path, encoding="utf-8") as f:
+    with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line: continue
@@ -213,7 +213,7 @@ def parse_jsonl_for_metadata(jsonl_path):
     tok_input = tok_cache_create = tok_cache_read = tok_output = 0
     all_ts = []
     try:
-        with open(jsonl_path, encoding="utf-8") as f:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     d = json.loads(line)
@@ -331,7 +331,7 @@ def parse_jsonl_for_metadata(jsonl_path):
 def parse_jsonl_for_index(jsonl_path, max_text=800):
     items = []
     try:
-        with open(jsonl_path, encoding="utf-8") as f:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     d = json.loads(line)
@@ -370,7 +370,7 @@ def session_meta(jsonl_path):
     msg_count = 0
     first_user = ""
     try:
-        with open(jsonl_path, encoding="utf-8") as f:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     d = json.loads(line)
@@ -846,7 +846,7 @@ function expandAllForSearch() {
 
 // 跳转锚点 #msg-N 时,确保该 msg 已展开
 function ensureMsgVisible() {
-  const m = location.hash.match(/^#msg-(\d+)$/);
+  const m = location.hash.match(/^#msg-(\\d+)$/);
   if (!m) return;
   const target = document.getElementById('msg-' + m[1]);
   if (target && target.classList.contains('msg-hidden')) {
@@ -898,7 +898,7 @@ const detailPanel = document.getElementById('detail-panel');
 const detailDataEl = document.getElementById('detail-data');
 let detailData = null;
 try { detailData = JSON.parse(detailDataEl.textContent); } catch(e) {}
-const sidMatch = location.pathname.match(/([0-9a-f]{8}-[0-9a-f-]+)\.html/);
+const sidMatch = location.pathname.match(/([0-9a-f]{8}-[0-9a-f-]+)\\.html/);
 const fullSid = sidMatch ? sidMatch[1] : '';
 
 function renderDetailPanel(data) {
